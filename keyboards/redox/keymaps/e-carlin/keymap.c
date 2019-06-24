@@ -39,14 +39,32 @@ enum custom_keycodes {
 //Tap Dance Declarations
 enum {
   TD_ESC_CAPS = 0,
+  TD_CTRL = 1,
+  TD_ALT = 2
 };
 
-//Tap Dance Definitions
-qk_tap_dance_action_t tap_dance_actions[] = {
-  //Tap once for Esc, twice for Caps Lock
-  [TD_ESC_CAPS]  = ACTION_TAP_DANCE_DOUBLE(KC_ESC, KC_CAPS),
+typedef struct {
+  bool is_press_action;
+  int state;
+} tap;
+
+enum {
+  SINGLE_TAP = 1,
+  SINGLE_HOLD = 2,
+  DOUBLE_TAP = 3,
+  DOUBLE_HOLD = 4,
+  DOUBLE_SINGLE_TAP = 5 //send two single taps
 };
 
+int cur_dance (qk_tap_dance_state_t *state);
+
+//for the ctrl tap dance
+void td_ctrl_finished (qk_tap_dance_state_t *state, void *user_data);
+void td_ctrl_reset (qk_tap_dance_state_t *state, void *user_data);
+
+//for the alt tap dance
+void td_alt_finished (qk_tap_dance_state_t *state, void *user_data);
+void td_alt_reset (qk_tap_dance_state_t *state, void *user_data);
 
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
@@ -60,7 +78,7 @@ TD(TD_ESC_CAPS),KC_A , KC_S    ,KC_D    ,KC_F    ,KC_G    ,KC_LBRC ,            
   //├────────┼────────┼────────┼────────┼────────┼────────┼────────┼────────┐       ┌────────┼────────┼────────┼────────┼────────┼────────┼────────┼────────┤
      KC_LSFT ,KC_Z    ,KC_X    ,KC_C    ,KC_V    ,KC_B    ,KC_PGUP ,KC_PGDN ,        KC_HOME ,KC_END  , KC_N   ,KC_M    ,KC_COMM ,KC_DOT  ,KC_SLSH ,KC_RSFT ,
   //├────────┼────────┼────────┼────────┼────┬───┴────┬───┼────────┼────────┤       ├────────┼────────┼───┬────┴───┬────┼────────┼────────┼────────┼────────┤
-     KC_LGUI ,  KC_F2 , KC_F11 , KC_F12 ,     KC_SPACE,    KC_ENT  ,KC_DEL  ,        KC_LALT ,KC_LCTRL,   KC_BSPACE,     KC_LEFT ,KC_DOWN ,KC_UP   ,KC_RGHT 
+     KC_LGUI ,  KC_F2 , KC_F11 , KC_F12 ,     KC_SPACE,    KC_ENT  ,KC_DEL  ,      TD(TD_ALT),TD(TD_CTRL) ,KC_BSPACE,     KC_LEFT ,KC_DOWN ,KC_UP   ,KC_RGHT 
   //└────────┴────────┴────────┴────────┘    └────────┘   └────────┴────────┘       └────────┴────────┘   └────────┘    └────────┴────────┴────────┴────────┘
   ),
 
@@ -105,4 +123,96 @@ TD(TD_ESC_CAPS),KC_A , KC_S    ,KC_D    ,KC_F    ,KC_G    ,KC_LBRC ,            
      XXXXXXX ,XXXXXXX ,XXXXXXX ,XXXXXXX ,     KC_BTN1 ,    KC_BTN2 ,_______ ,        _______ ,_______ ,    XXXXXXX ,     XXXXXXX ,XXXXXXX ,XXXXXXX ,XXXXXXX 
   //└────────┴────────┴────────┴────────┘    └────────┘   └────────┴────────┘       └────────┴────────┘   └────────┘    └────────┴────────┴────────┴────────┘
   )
+};
+
+/* Return an integer that corresponds to what kind of tap dance should be executed.
+ *
+ * How to figure out tap dance state: interrupted and pressed.
+ *
+ * Interrupted: If the state of a dance dance is "interrupted", that means that another key has been hit
+ *  under the tapping term. This is typically indicitive that you are trying to "tap" the key.
+ *
+ * Pressed: Whether or not the key is still being pressed. If this value is true, that means the tapping term
+ *  has ended, but the key is still being pressed down. This generally means the key is being "held".
+ */
+int cur_dance (qk_tap_dance_state_t *state) {
+  if (state->count == 1) {
+    if (state->interrupted || !state->pressed)  return SINGLE_TAP;
+    //key has not been interrupted, but they key is still held. Means you want to send a 'HOLD'.
+    else return SINGLE_HOLD;
+  }
+  else if (state->count == 2) {
+    /*
+     * DOUBLE_SINGLE_TAP is to distinguish between typing "pepper", and actually wanting a double tap
+     * action when hitting 'pp'. Suggested use case for this return value is when you want to send two
+     * keystrokes of the key, and not the 'double tap' action/macro.
+    */
+    if (state->interrupted) return DOUBLE_SINGLE_TAP;
+    else if (state->pressed) return DOUBLE_HOLD;
+    else return DOUBLE_TAP;
+  }
+  else return 8; //magic number. At some point this method will expand to work for more presses
+}
+
+//initialize an instance of 'tap' for the ctrl tap dance.
+static tap td_ctrl_state = {
+  .is_press_action = true,
+  .state = 0
+};
+
+void td_ctrl_finished (qk_tap_dance_state_t *state, void *user_data) {
+  td_ctrl_state.state = cur_dance(state);
+  switch (td_ctrl_state.state) {
+    case SINGLE_TAP: register_code(KC_LCTRL); break;
+    case SINGLE_HOLD: register_code(KC_LCTRL); break;
+    case DOUBLE_TAP: register_code(KC_LCTRL); register_code(KC_TAB); break;
+    case DOUBLE_SINGLE_TAP: register_code(KC_LCTRL); unregister_code(KC_LCTRL); register_code(KC_LCTRL);
+  }
+}
+
+void td_ctrl_reset (qk_tap_dance_state_t *state, void *user_data) {
+  switch (td_ctrl_state.state) {
+    case SINGLE_TAP: unregister_code(KC_LCTRL); break;
+    case SINGLE_HOLD: unregister_code(KC_LCTRL); break;
+    case DOUBLE_TAP: unregister_code(KC_TAB); unregister_code(KC_LCTRL); break;
+    case DOUBLE_SINGLE_TAP: unregister_code(KC_LCTRL);
+  }
+  td_ctrl_state.state = 0;
+}
+
+/** TODO(ecarlin): Smelly code. Practically copy and past of TD_CTRL */
+//initialize an instance of 'tap' for the alt tap dance.
+static tap td_alt_state = {
+  .is_press_action = true,
+  .state = 0
+};
+
+void td_alt_finished (qk_tap_dance_state_t *state, void *user_data) {
+  td_alt_state.state = cur_dance(state);
+  switch (td_alt_state.state) {
+    case SINGLE_TAP: register_code(KC_LALT); break;
+    case SINGLE_HOLD: register_code(KC_LALT); break;
+    case DOUBLE_TAP: register_code(KC_LALT); register_code(KC_TAB); break;
+    case DOUBLE_SINGLE_TAP: register_code(KC_LALT); unregister_code(KC_LALT); register_code(KC_LALT);
+  }
+}
+
+void td_alt_reset (qk_tap_dance_state_t *state, void *user_data) {
+  switch (td_alt_state.state) {
+    case SINGLE_TAP: unregister_code(KC_LALT); break;
+    case SINGLE_HOLD: unregister_code(KC_LALT); break;
+    case DOUBLE_TAP: unregister_code(KC_TAB); unregister_code(KC_LALT); break;
+    case DOUBLE_SINGLE_TAP: unregister_code(KC_LALT);
+  }
+  td_alt_state.state = 0;
+}
+
+//Tap Dance Definitions
+qk_tap_dance_action_t tap_dance_actions[] = {
+  // Tap once for Esc, twice for Caps Lock
+  [TD_ESC_CAPS]  = ACTION_TAP_DANCE_DOUBLE(KC_ESC, KC_CAPS),
+  // ctrlx2 => ctrl+tab
+  [TD_CTRL]  = ACTION_TAP_DANCE_FN_ADVANCED(NULL,td_ctrl_finished, td_ctrl_reset),
+  // altx2 => alt+tab
+  [TD_ALT]  = ACTION_TAP_DANCE_FN_ADVANCED(NULL,td_alt_finished, td_alt_reset)
 };
